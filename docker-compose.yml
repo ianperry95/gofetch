@@ -1,0 +1,73 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-gofetch}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      POSTGRES_DB: ${POSTGRES_DB:-gofetch}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-gofetch}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  miniflux:
+    image: miniflux/miniflux:latest
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-gofetch}:${POSTGRES_PASSWORD:-changeme}@postgres/miniflux?sslmode=disable
+      RUN_MIGRATIONS: 1
+      CREATE_ADMIN: 1
+      ADMIN_USERNAME: admin
+      ADMIN_PASSWORD: ${MINIFLUX_ADMIN_PASSWORD:-changeme}
+    ports:
+      - "8084:8080"
+
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      GOFETCH_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-gofetch}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/${POSTGRES_DB:-gofetch}
+      GOFETCH_MINIFLUX_URL: http://miniflux:8080
+      GOFETCH_MINIFLUX_API_KEY: ${MINIFLUX_API_KEY}
+      GOFETCH_MINIFLUX_WEBHOOK_SECRET: ${MINIFLUX_WEBHOOK_SECRET}
+      GOFETCH_SECRET_KEY: ${GOFETCH_SECRET_KEY:-change-this}
+      GOFETCH_EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-onnx}
+      GOFETCH_EMBEDDING_MODEL: ${EMBEDDING_MODEL:-nomic-ai/nomic-embed-text-v1.5}
+      GOFETCH_EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-768}
+      GOFETCH_OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GOFETCH_OPENAI_EMBEDDING_MODEL: ${OPENAI_EMBEDDING_MODEL:-text-embedding-3-small}
+    ports:
+      - "8000:8000"
+    volumes:
+      - model-cache:/app/models
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - api
+    environment:
+      GOFETCH_API_URL: http://api:8000
+    ports:
+      - "3001:3000"
+
+volumes:
+  pgdata:
+  model-cache:
